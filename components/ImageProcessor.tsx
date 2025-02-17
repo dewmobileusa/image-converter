@@ -1,17 +1,18 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Slider } from "@/components/ui/slider";
 import ImageUploader from "./ImageUploader";
 import ProcessedImage from "./ProcessedImage";
-import { Home } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { runningHubApi } from "@/services/runningHubApi";
 import Image from "next/image";
+import { toast } from "sonner";
+import { ConfirmDialog } from "./ConfirmDialog";
 
-// Add type for effect ID at the top of the file
+// Update the EffectId type to only include RunningHub effects
 type EffectId =
-  | "blackAndWhite"
   | "easyLighting"
   | "cartoonBlindBox"
   | "cartoonPortrait"
@@ -19,22 +20,18 @@ type EffectId =
   | "dreamlikeOil"
   | "idPhoto";
 
+// Add a type for all modes including blackAndWhite
+type ImageMode = EffectId | "blackAndWhite";
+
 export default function ImageProcessor() {
   const [sourceImage, setSourceImage] = useState<string | null>(null);
   const [processedImages, setProcessedImages] = useState<string[]>([]);
   const [showBWSlider, setShowBWSlider] = useState(false);
   const [contrastLevel, setContrastLevel] = useState([0.5]); // 0-1 range
-  const [activeMode, setActiveMode] = useState<
-    | "blackAndWhite"
-    | "easyLighting"
-    | "cartoonBlindBox"
-    | "cartoonPortrait"
-    | "animeCharacter"
-    | "dreamlikeOil"
-    | "idPhoto"
-    | null
-  >(null);
+  const [activeMode, setActiveMode] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [currentTaskId, setCurrentTaskId] = useState<string | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
   // Add state for window dimensions
   const [dimensions, setDimensions] = useState({
@@ -42,8 +39,42 @@ export default function ImageProcessor() {
     height: 512,
   });
 
-  // Add new state for uploaded image URI
-  const [uploadedImageUri, setUploadedImageUri] = useState<string | null>(null);
+  // Add new state for uploaded URL
+  const [uploadedRunningHubUrl, setUploadedRunningHubUrl] = useState<
+    string | null
+  >(null);
+
+  // Define clearAll first
+  const clearAll = useCallback(async () => {
+    if (isProcessing && currentTaskId) {
+      try {
+        await runningHubApi.cancelTask(currentTaskId);
+        toast.success("Processing cancelled");
+      } catch (error) {
+        console.error("Failed to cancel task:", error);
+      }
+    }
+
+    // Reset all states
+    setSourceImage(null);
+    setProcessedImages([]);
+    setShowBWSlider(false);
+    setActiveMode(null);
+    setUploadedRunningHubUrl(null);
+    setIsProcessing(false);
+    setCurrentTaskId(null);
+    setShowClearConfirm(false);
+  }, [isProcessing, currentTaskId]);
+
+  // Then use it in handleClear
+  const handleClear = useCallback(() => {
+    if (isProcessing && currentTaskId) {
+      setShowClearConfirm(true);
+    } else {
+      // If no task is running, clear immediately
+      clearAll();
+    }
+  }, [isProcessing, currentTaskId, clearAll]);
 
   // Handle window resize
   useEffect(() => {
@@ -69,187 +100,151 @@ export default function ImageProcessor() {
     return () => window.removeEventListener("resize", updateDimensions);
   }, []);
 
-  const handleImageUpload = (imageData: string) => {
+  // Image upload should clear the previous uploaded URL
+  const handleImageUpload = useCallback((imageData: string) => {
     setSourceImage(imageData);
     setProcessedImages([]);
     setShowBWSlider(false);
     setActiveMode(null);
-  };
+    setUploadedRunningHubUrl(null);
+  }, []);
 
-  const handleClear = () => {
-    setSourceImage(null);
-    setProcessedImages([]);
-    setShowBWSlider(false);
-    setActiveMode(null);
-    setUploadedImageUri(null); // Clear the uploaded image URI
-  };
+  const processImage = useCallback(
+    async (mode: ImageMode) => {
+      if (!sourceImage) return;
 
-  const processBlackAndWhite = async (contrast: number) => {
-    if (!sourceImage) return;
+      try {
+        setIsProcessing(true);
+        setActiveMode(mode);
 
-    const img = new window.Image();
-    img.src = sourceImage;
-
-    await new Promise((resolve) => {
-      img.onload = () => {
-        const canvas = document.createElement("canvas");
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext("2d");
-
-        if (!ctx) return;
-
-        ctx.drawImage(img, 0, 0);
-
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const data = imageData.data;
-
-        // Convert to black and white with adjustable contrast
-        for (let i = 0; i < data.length; i += 4) {
-          // Calculate grayscale value using luminance formula
-          const gray =
-            0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
-
-          // Apply contrast adjustment
-          const factor = (259 * (contrast * 2 - 1) + 255) / 255;
-          const adjustedGray = factor * (gray - 128) + 128;
-
-          // Ensure values stay within 0-255 range
-          const value = Math.min(255, Math.max(0, adjustedGray));
-
-          data[i] = value; // R
-          data[i + 1] = value; // G
-          data[i + 2] = value; // B
-          // data[i + 3] is Alpha, we don't need to change it
+        // Hide B&W slider when switching to other effects
+        if (mode !== "blackAndWhite") {
+          setShowBWSlider(false);
         }
 
-        ctx.putImageData(imageData, 0, 0);
-        setProcessedImages([canvas.toDataURL("image/png")]);
-        resolve(null);
-      };
-    });
-  };
+        if (mode === "blackAndWhite") {
+          setShowBWSlider(true);
+          const processAndApplyBW = async (contrast: number) => {
+            const img = new window.Image();
+            img.src = sourceImage;
 
-  const processAnimate = async (
-    mode:
-      | "easyLighting"
-      | "cartoonBlindBox"
-      | "cartoonPortrait"
-      | "animeCharacter"
-      | "dreamlikeOil"
-      | "idPhoto"
-  ) => {
-    if (!sourceImage) return;
-    setIsProcessing(true);
+            await new Promise((resolve) => {
+              img.onload = () => {
+                const canvas = document.createElement("canvas");
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext("2d");
 
-    try {
-      console.log(`Starting ${mode} process...`);
+                if (!ctx) return;
 
-      // Only upload if we don't have a URI yet
-      let imageFileName = uploadedImageUri;
-      if (!imageFileName) {
-        console.log("Uploading image for the first time...");
-        imageFileName = await runningHubApi.uploadImage(sourceImage);
-        setUploadedImageUri(imageFileName); // Remember the URI
-        console.log("Upload successful, fileName:", imageFileName);
-      } else {
-        console.log("Reusing previously uploaded image:", imageFileName);
-      }
+                ctx.drawImage(img, 0, 0);
 
-      // Create task with mode
-      const taskId = await runningHubApi.createTask(imageFileName, mode);
-      console.log("Task created successfully, taskId:", taskId);
+                const imageData = ctx.getImageData(
+                  0,
+                  0,
+                  canvas.width,
+                  canvas.height
+                );
+                const data = imageData.data;
 
-      // Poll for status
-      let attempts = 0;
-      const maxAttempts = 300; // 10 minutes maximum wait time (2 seconds * 300 = 600 seconds = 10 minutes)
+                // Convert to black and white with adjustable contrast
+                for (let i = 0; i < data.length; i += 4) {
+                  const gray =
+                    0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+                  const factor = (259 * (contrast * 2 - 1) + 255) / 255;
+                  const adjustedGray = factor * (gray - 128) + 128;
+                  const value = Math.min(255, Math.max(0, adjustedGray));
 
-      while (attempts < maxAttempts) {
-        const status = await runningHubApi.checkStatus(taskId);
-        console.log("Current status:", status);
+                  data[i] = value; // R
+                  data[i + 1] = value; // G
+                  data[i + 2] = value; // B
+                }
 
-        if (status === "SUCCESS") {
-          const outputUrls = await runningHubApi.getOutputs(taskId);
-          console.log("Process completed, output URLs:", outputUrls);
-          setProcessedImages(outputUrls);
-          break;
-        } else if (status === "FAILED") {
-          throw new Error("Image processing failed");
+                ctx.putImageData(imageData, 0, 0);
+                setProcessedImages([canvas.toDataURL("image/png")]);
+                resolve(null);
+              };
+            });
+          };
+          await processAndApplyBW(contrastLevel[0]);
+        } else {
+          let imageFileName = uploadedRunningHubUrl;
+
+          if (!imageFileName) {
+            imageFileName = await runningHubApi.uploadImage(sourceImage);
+            setUploadedRunningHubUrl(imageFileName);
+          }
+
+          const taskId = await runningHubApi.createTask(imageFileName, mode);
+          setCurrentTaskId(taskId);
+
+          try {
+            // Poll for status
+            let attempts = 0;
+            const maxAttempts = 300; // 10 minutes maximum
+
+            while (attempts < maxAttempts) {
+              const status = await runningHubApi.checkStatus(taskId);
+              console.log("Current status:", status);
+
+              if (status === "SUCCESS") {
+                const outputUrls = await runningHubApi.getOutputs(taskId);
+                setProcessedImages(outputUrls);
+                break;
+              }
+
+              if (status === "FAILED") {
+                throw new Error("Processing failed");
+              }
+
+              if (status === "PROCESSING") {
+                // Still processing, continue polling
+                attempts++;
+                await new Promise((resolve) => setTimeout(resolve, 2000));
+                continue;
+              }
+
+              attempts++;
+              await new Promise((resolve) => setTimeout(resolve, 2000));
+            }
+
+            if (attempts >= maxAttempts) {
+              throw new Error("Processing timed out");
+            }
+          } catch (error) {
+            if (
+              error instanceof Error &&
+              error.message === "TASK_QUEUE_MAXED"
+            ) {
+              toast.error("System is busy", {
+                description:
+                  "Please wait a moment and try again. Too many requests are being processed.",
+                duration: 5000,
+              });
+              return;
+            }
+            throw error; // Re-throw other errors
+          }
         }
-
-        attempts++;
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+      } catch (error) {
+        console.error("Processing failed:", error);
+        toast.error("Processing failed", {
+          description:
+            error instanceof Error ? error.message : "Unknown error occurred",
+        });
+      } finally {
+        setIsProcessing(false);
+        setCurrentTaskId(null);
       }
-
-      if (attempts >= maxAttempts) {
-        throw new Error("Image process timed out");
-      }
-    } catch (error) {
-      console.error(`${mode} processing failed:`, error);
-      alert(`Failed to process image: ${(error as Error).message}`);
-    } finally {
-      setIsProcessing(false);
-    }
-  };
-
-  const processImage = async (
-    operation:
-      | "blackAndWhite"
-      | "easyLighting"
-      | "cartoonBlindBox"
-      | "cartoonPortrait"
-      | "animeCharacter"
-      | "dreamlikeOil"
-      | "idPhoto"
-  ) => {
-    if (!sourceImage) return;
-
-    setActiveMode(operation);
-    setProcessedImages([]);
-
-    switch (operation) {
-      case "blackAndWhite":
-        setShowBWSlider(true);
-        await processBlackAndWhite(contrastLevel[0]);
-        break;
-
-      case "easyLighting":
-        setShowBWSlider(false);
-        await processAnimate("easyLighting");
-        break;
-
-      case "cartoonBlindBox":
-        setShowBWSlider(false);
-        await processAnimate("cartoonBlindBox");
-        break;
-
-      case "cartoonPortrait":
-        setShowBWSlider(false);
-        await processAnimate("cartoonPortrait");
-        break;
-
-      case "animeCharacter":
-        setShowBWSlider(false);
-        await processAnimate("animeCharacter");
-        break;
-
-      case "dreamlikeOil":
-        setShowBWSlider(false);
-        await processAnimate("dreamlikeOil");
-        break;
-
-      case "idPhoto":
-        setShowBWSlider(false);
-        await processAnimate("idPhoto");
-        break;
-    }
-  };
+    },
+    [sourceImage, uploadedRunningHubUrl, contrastLevel]
+  );
 
   return (
     <div className="container mx-auto px-4 space-y-4">
       {sourceImage && (
         <Button variant="outline" onClick={handleClear} className="mb-2">
-          <Home className="w-4 h-4 mr-2" />
+          <RotateCcw className="w-4 h-4 mr-2" />
           Clear All
         </Button>
       )}
@@ -278,7 +273,7 @@ export default function ImageProcessor() {
               value={contrastLevel}
               onValueChange={(value) => {
                 setContrastLevel(value);
-                processBlackAndWhite(value[0]);
+                processImage("blackAndWhite");
               }}
               min={0}
               max={1}
@@ -327,7 +322,7 @@ export default function ImageProcessor() {
           ].map((effect) => (
             <Button
               key={effect.id}
-              onClick={() => processImage(effect.id as EffectId)}
+              onClick={() => processImage(effect.id as ImageMode)}
               disabled={!sourceImage || isProcessing}
               className={`relative w-32 h-32 p-0 overflow-hidden ${
                 activeMode === effect.id
@@ -351,6 +346,14 @@ export default function ImageProcessor() {
           ))}
         </div>
       </div>
+
+      <ConfirmDialog
+        isOpen={showClearConfirm}
+        onClose={() => setShowClearConfirm(false)}
+        onConfirm={clearAll}
+        title="Cancel Processing"
+        description="Are you sure you want to cancel the current processing task? This action cannot be undone."
+      />
     </div>
   );
 }

@@ -5,31 +5,28 @@ export async function POST(request: Request) {
     const { imageUrl } = await request.json();
     console.log('Server: Attempting to download image from:', imageUrl);
     
-    const response = await fetch(imageUrl);
-    if (!response.ok) {
-      throw new Error(`Failed to fetch image: ${response.status} ${response.statusText}`);
-    }
-    
-    const arrayBuffer = await response.arrayBuffer();
-    if (!arrayBuffer || arrayBuffer.byteLength === 0) {
-      throw new Error('Received empty image data');
-    }
-    
-    const buffer = Buffer.from(arrayBuffer);
-    
-    return new NextResponse(buffer, {
+    const response = await fetch(imageUrl, {
       headers: {
-        'Content-Type': 'application/octet-stream',
-        'Content-Disposition': `attachment; filename="processed-image-${Date.now()}.png"`,
-        'Content-Length': buffer.length.toString(),
-        'Content-Transfer-Encoding': 'binary',
-        'Cache-Control': 'no-cache',
-        'X-Content-Type-Options': 'nosniff',
+        "Authorization": `Bearer ${process.env.NEXT_PUBLIC_RUNNINGHUB_API_KEY}`,
       },
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to fetch image: ${response.statusText}`);
+    }
+    
+    const blob = await response.blob();
+    const headers = new Headers();
+    headers.set("Content-Type", "image/png");
+    headers.set("Content-Disposition", "attachment");
+
+    return new NextResponse(blob, {
+      status: 200,
+      headers,
     });
   } catch (error) {
     console.error('Server: Download error:', error);
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+    const errorMessage = error instanceof Error ? error.message : 'Failed to download image';
     
     return new NextResponse(JSON.stringify({ error: errorMessage }), { 
       status: 500,

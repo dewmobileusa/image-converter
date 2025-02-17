@@ -1,4 +1,4 @@
-# Image Converter
+# AI Image Converter
 
 A modern web application for image processing and style transfer, built with Next.js 15.1.6. This tool allows users to apply various effects to their images using the RunningHub API.
 

@@ -95,8 +95,11 @@ interface NodeInfo {
   fieldValue: string | number;
 }
 
+// Add type for mode
+type RunningHubMode = keyof typeof WORKFLOW_IDS;
+
 export const runningHubApi = {
-  async uploadImage(imageData: string): Promise<string> {
+  uploadImage: async (imageData: string): Promise<string> => {
     try {
       // Convert base64 to blob
       const base64Data = imageData.split(';base64,').pop();
@@ -160,43 +163,26 @@ export const runningHubApi = {
     }
   },
 
-  async createTask(imageFileName: string, mode: 'easyLighting' | 'cartoonBlindBox' | 'cartoonPortrait' | 'animeCharacter' | 'dreamlikeOil' | 'idPhoto'): Promise<string> {
+  createTask: async (imageFileName: string, mode: RunningHubMode): Promise<string> => {
     try {
-      const requestBody = {
-        workflowId: WORKFLOW_IDS[mode],
-        apiKey: API_KEY,
-        nodeInfoList: [
-          {
-            nodeId: NODE_IDS[mode],
-            fieldName: "image",
-            fieldValue: imageFileName
-          }
-        ]
-      };
+      console.log('Creating task with:', { imageFileName, mode });
 
-      console.log('Creating task with:', requestBody);
-
-      const response = await fetchWithTimeout(`${API_BASE_URL}/task/openapi/create`, {
+      const response = await fetch('/api/runninghub/create', {
         method: 'POST',
         headers: {
-          'User-Agent': 'Apifox/1.0.0 (https://apifox.com)',
           'Content-Type': 'application/json',
-          'Accept': '*/*',
-          'Host': 'www.runninghub.ai',
-          'Connection': 'keep-alive'
         },
-        body: JSON.stringify(requestBody),
+        body: JSON.stringify({ imageFileName, mode }),
       });
 
-      const responseText = await response.text();
-      console.log('Create task response:', responseText);
-
-      const result: CreateTaskResponse = JSON.parse(responseText);
-      console.log('Parsed create task response:', result);
+      const result = await response.json();
+      console.log('Create task response:', result);
 
       if (result.code !== 0) {
-        console.error('Create task error:', result);
-        throw new Error(result.msg);
+        if (result.msg === "TASK_QUEUE_MAXED") {
+          throw new Error("TASK_QUEUE_MAXED");
+        }
+        throw new Error(result.msg || 'Failed to create task');
       }
 
       return result.data.taskId;
@@ -206,42 +192,34 @@ export const runningHubApi = {
     }
   },
 
-  async checkStatus(taskId: string): Promise<string> {
+  checkStatus: async (taskId: string): Promise<string> => {
     try {
       console.log('Checking status for taskId:', taskId);
 
-      const response = await fetchWithTimeout(`${API_BASE_URL}/task/openapi/status`, {
+      const response = await fetch('/api/runninghub/status', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'Host': 'www.runninghub.ai'
         },
-        body: JSON.stringify({ 
-          taskId,
-          apiKey: API_KEY
-        }),
+        body: JSON.stringify({ taskId }),
       });
 
-      const responseText = await response.text();
-      console.log('Status response:', responseText);
+      const result = await response.json();
+      console.log('Status response:', result);
 
-      const result: TaskStatusResponse = JSON.parse(responseText);
-      console.log('Parsed status response:', result);
-
-      if (result.code !== 0) {
-        console.error('Status check error:', result);
-        throw new Error(result.msg);
+      // Always return a valid status
+      if (result.data) {
+        return result.data;
       }
 
-      // The status is directly in result.data as a string
-      return result.data;
+      return "PROCESSING";
     } catch (error) {
       console.error('Status check error details:', error);
-      throw error;
+      return "PROCESSING";
     }
   },
 
-  async getOutputs(taskId: string): Promise<string[]> {
+  getOutputs: async (taskId: string): Promise<string[]> => {
     try {
       console.log('Getting outputs for taskId:', taskId);
 
@@ -274,6 +252,25 @@ export const runningHubApi = {
       return result.data.map(output => output.fileUrl);
     } catch (error) {
       console.error('Get outputs error details:', error);
+      throw error;
+    }
+  },
+
+  cancelTask: async (taskId: string): Promise<void> => {
+    try {
+      const response = await fetch('/api/runninghub/cancel', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ taskId }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to cancel task');
+      }
+    } catch (error) {
+      console.error('Cancel task error:', error);
       throw error;
     }
   },
