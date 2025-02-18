@@ -99,179 +99,85 @@ interface NodeInfo {
 type RunningHubMode = keyof typeof WORKFLOW_IDS;
 
 export const runningHubApi = {
-  uploadImage: async (imageData: string): Promise<string> => {
-    try {
-      // Convert base64 to blob
-      const base64Data = imageData.split(';base64,').pop();
-      if (!base64Data) {
-        throw new Error('Invalid image data format');
-      }
+  async uploadImage(imageData: string): Promise<string> {
+    const response = await fetch("/api/runninghub", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ imageData }),
+    });
 
-      const byteCharacters = atob(base64Data);
-      const byteArrays = [];
-
-      for (let offset = 0; offset < byteCharacters.length; offset += 512) {
-        const slice = byteCharacters.slice(offset, offset + 512);
-        const byteNumbers = new Array(slice.length);
-        for (let i = 0; i < slice.length; i++) {
-          byteNumbers[i] = slice.charCodeAt(i);
-        }
-        const byteArray = new Uint8Array(byteNumbers);
-        byteArrays.push(byteArray);
-      }
-
-      const blob = new Blob(byteArrays, { type: 'image/jpeg' });
-      const formData = new FormData();
-      
-      // Important: Order and exact naming matters
-      formData.append('apiKey', API_KEY);
-      formData.append('fileType', 'image');
-      formData.append('file', blob, 'image.jpg');
-
-      console.log('Preparing to upload image with size:', blob.size);
-
-      const uploadResponse = await fetchWithTimeout(`${API_BASE_URL}/task/openapi/upload`, {
-        method: 'POST',
-        // Remove Content-Type header completely - let browser set it
-        body: formData,
-      });
-
-      const responseText = await uploadResponse.text();
-      console.log('Raw response:', responseText);
-
-      let result: TaskResponse;
-      try {
-        result = JSON.parse(responseText);
-      } catch (e) {
-        console.error('Failed to parse response:', e);
-        throw new Error('Invalid response format');
-      }
-
-      console.log('Parsed response:', result);
-
-      // Update success code check to match API documentation
-      if (result.code !== 0) { // API returns code 0 for success
-        console.error('API Error:', result);
-        throw new Error(result.msg);
-      }
-
-      // Update to match the API response format
-      return result.data.fileName; // Use fileName as taskId for subsequent calls
-    } catch (error) {
-      console.error('Upload error details:', error);
-      throw error;
+    if (!response.ok) {
+      throw new Error("Failed to upload image");
     }
+
+    const data = await response.json();
+    return data.imageFileName;
   },
 
-  createTask: async (imageFileName: string, mode: RunningHubMode): Promise<string> => {
-    try {
-      console.log('Creating task with:', { imageFileName, mode });
+  async createTask(imageFileName: string, mode: RunningHubMode): Promise<string> {
+    const response = await fetch("/api/runninghub", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ imageFileName, mode }),
+    });
 
-      const response = await fetch('/api/runninghub/create', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ imageFileName, mode }),
-      });
-
-      const result = await response.json();
-      console.log('Create task response:', result);
-
-      if (result.code !== 0) {
-        if (result.msg === "TASK_QUEUE_MAXED") {
-          throw new Error("TASK_QUEUE_MAXED");
-        }
-        throw new Error(result.msg || 'Failed to create task');
-      }
-
-      return result.data.taskId;
-    } catch (error) {
-      console.error('Create task error details:', error);
-      throw error;
+    if (!response.ok) {
+      throw new Error("Failed to create task");
     }
+
+    const data = await response.json();
+    return data.taskId;
   },
 
-  checkStatus: async (taskId: string): Promise<string> => {
-    try {
-      console.log('Checking status for taskId:', taskId);
+  async checkStatus(taskId: string): Promise<"PROCESSING" | "SUCCESS" | "FAILED"> {
+    const response = await fetch("/api/runninghub", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ taskId, action: "checkStatus" }),
+    });
 
-      const response = await fetch('/api/runninghub/status', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ taskId }),
-      });
-
-      const result = await response.json();
-      console.log('Status response:', result);
-
-      // Always return a valid status
-      if (result.data) {
-        return result.data;
-      }
-
-      return "PROCESSING";
-    } catch (error) {
-      console.error('Status check error details:', error);
-      return "PROCESSING";
+    if (!response.ok) {
+      throw new Error("Failed to check status");
     }
+
+    const data = await response.json();
+    return data.status;
   },
 
-  getOutputs: async (taskId: string): Promise<string[]> => {
-    try {
-      console.log('Getting outputs for taskId:', taskId);
+  async getOutputs(taskId: string): Promise<string[]> {
+    const response = await fetch("/api/runninghub", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ taskId, action: "getOutputs" }),
+    });
 
-      const response = await fetchWithTimeout(`${API_BASE_URL}/task/openapi/outputs`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': '*/*',
-          'Host': 'www.runninghub.ai',
-          'Connection': 'keep-alive'
-        },
-        body: JSON.stringify({ 
-          taskId,
-          apiKey: API_KEY
-        }),
-      });
-
-      const responseText = await response.text();
-      console.log('Outputs response:', responseText);
-
-      const result: TaskOutputResponse = JSON.parse(responseText);
-      console.log('Parsed outputs response:', result);
-
-      if (result.code !== 0) {
-        console.error('Get outputs error:', result);
-        throw new Error(result.msg);
-      }
-
-      // Return all file URLs instead of just the first one
-      return result.data.map(output => output.fileUrl);
-    } catch (error) {
-      console.error('Get outputs error details:', error);
-      throw error;
+    if (!response.ok) {
+      throw new Error("Failed to get outputs");
     }
+
+    const data = await response.json();
+    return data.outputUrls;
   },
 
-  cancelTask: async (taskId: string): Promise<void> => {
-    try {
-      const response = await fetch('/api/runninghub/cancel', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ taskId }),
-      });
+  async cancelTask(taskId: string): Promise<void> {
+    const response = await fetch("/api/runninghub", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ taskId, action: "cancel" }),
+    });
 
-      if (!response.ok) {
-        throw new Error('Failed to cancel task');
-      }
-    } catch (error) {
-      console.error('Cancel task error:', error);
-      throw error;
+    if (!response.ok) {
+      throw new Error("Failed to cancel task");
     }
   },
 }; 

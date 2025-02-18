@@ -4,11 +4,13 @@ import { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
 import { Plus, Loader2 } from "lucide-react";
 import Image from "next/image";
+import { toast } from "sonner";
 
 interface ImageUploaderProps {
-  onImageUpload: (imageData: string) => void;
+  onImageUpload: (imageData: string, fileName?: string) => void;
   currentImage: string | null;
   dimensions: { width: number; height: number };
+  label?: string;
 }
 
 const HumanSilhouette = () => (
@@ -41,22 +43,59 @@ export default function ImageUploader({
   onImageUpload,
   currentImage,
   dimensions,
+  label,
 }: ImageUploaderProps) {
   const [isUploading, setIsUploading] = useState(false);
 
   const onDrop = useCallback(
-    (acceptedFiles: File[]) => {
+    async (acceptedFiles: File[]) => {
       const file = acceptedFiles[0];
       if (file) {
-        setIsUploading(true);
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          if (e.target?.result) {
-            onImageUpload(e.target.result as string);
-            setIsUploading(false);
-          }
-        };
-        reader.readAsDataURL(file);
+        try {
+          setIsUploading(true);
+          console.log("Starting image upload process...", file.name);
+
+          const reader = new FileReader();
+          reader.onload = async (e) => {
+            const base64Data = e.target?.result as string;
+            console.log("Image converted to base64, sending to API...");
+
+            const response = await fetch("/api/runninghub", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                action: "upload",
+                imageData: base64Data,
+              }),
+            });
+
+            if (!response.ok) {
+              throw new Error("Upload failed");
+            }
+
+            const data = await response.json();
+            console.log("Upload response received:", data);
+
+            if (data.success) {
+              console.log(
+                "Image upload successful, fileName:",
+                data.imageFileName
+              );
+              onImageUpload(base64Data, data.imageFileName);
+            } else {
+              throw new Error(data.error || "Upload failed");
+            }
+          };
+
+          reader.readAsDataURL(file);
+        } catch (error) {
+          console.error("Image upload error:", error);
+          toast.error("Failed to upload image");
+        } finally {
+          setIsUploading(false);
+        }
       }
     },
     [onImageUpload]
@@ -71,43 +110,46 @@ export default function ImageUploader({
   });
 
   return (
-    <div
-      className={`relative flex-shrink-0 border-2 ${
-        isDragActive ? "border-primary" : "border-gray-300"
-      } border-dashed rounded-lg overflow-hidden`}
-      style={{ width: dimensions.width, height: dimensions.height }}
-      {...getRootProps()}
-    >
-      <input {...getInputProps()} />
-      {currentImage ? (
-        <>
-          <Image
-            src={currentImage}
-            alt="Source"
-            fill
-            className="object-contain"
-            sizes={`${dimensions.width}px`}
-            priority
-          />
-          <div className="absolute bottom-0 inset-x-0 bg-black/50 text-white p-2 text-center text-sm">
-            Click or drag to replace
+    <div className="space-y-2">
+      {label && <p className="text-sm text-gray-500 text-center">{label}</p>}
+      <div
+        className={`relative flex-shrink-0 border-2 ${
+          isDragActive ? "border-primary" : "border-gray-300"
+        } border-dashed rounded-lg overflow-hidden`}
+        style={{ width: dimensions.width, height: dimensions.height }}
+        {...getRootProps()}
+      >
+        <input {...getInputProps()} />
+        {currentImage ? (
+          <>
+            <Image
+              src={currentImage}
+              alt="Source"
+              fill
+              className="object-contain"
+              sizes={`${dimensions.width}px`}
+              priority
+            />
+            <div className="absolute bottom-0 inset-x-0 bg-black/50 text-white p-2 text-center text-sm">
+              Click or drag to replace
+            </div>
+          </>
+        ) : isUploading ? (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 text-center p-4">
+            <Loader2 className="w-8 h-8 animate-spin mb-2" />
+            <p className="text-base">Uploading...</p>
           </div>
-        </>
-      ) : isUploading ? (
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 text-center p-4">
-          <Loader2 className="w-8 h-8 animate-spin mb-2" />
-          <p className="text-base">Uploading...</p>
-        </div>
-      ) : (
-        <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 text-center p-4">
-          <HumanSilhouette />
-          <Plus className="w-12 h-12 text-gray-400 relative z-10 mb-2" />
-          <p className="text-base relative z-10">Click or drag image here</p>
-          <p className="text-sm text-gray-400 mt-2 relative z-10">
-            Supports: JPG, PNG
-          </p>
-        </div>
-      )}
+        ) : (
+          <div className="absolute inset-0 flex flex-col items-center justify-center text-gray-500 text-center p-4">
+            <HumanSilhouette />
+            <Plus className="w-12 h-12 text-gray-400 relative z-10 mb-2" />
+            <p className="text-base relative z-10">Click or drag image here</p>
+            <p className="text-sm text-gray-400 mt-2 relative z-10">
+              Supports: JPG, PNG
+            </p>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
